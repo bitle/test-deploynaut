@@ -21,3 +21,14 @@ jobs:
         env:
           TARGET_ENVIRONMENT: ${{ inputs.environment }}
         run: echo "Hello ${TARGET_ENVIRONMENT}"
+
+  hello-again:
+    name: Hello ${{ inputs.environment }} (second job)
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - name: Print greeting
+        env:
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: echo "Hello ${TARGET_ENVIRONMENT}"
