@@ -1,0 +1,20 @@
+# High-level policy definition
+policy:
+  approval:
+    - or:
+        - allow-dev-environment
+
+# Approval rule definitions
+approval_rules:
+
+  - name: authored-by-me
+    if:
+      authored_by:
+        users: ['bitle']
+    requires:
+      count: 0
+  - name: allow-dev-environment
+    if:
+      environment: ['dev']
+    requires:
+      count: 0
