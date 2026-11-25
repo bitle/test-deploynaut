@@ -1,0 +1,26 @@
+# Always-green check that reports on both pull requests and merge groups.
+# Require "tests" on main so the merge queue has a check that completes
+# on gh-readonly-queue/* refs (Check CodeQL Status is PR-only).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run hello-world
+        run: python3 hello.py

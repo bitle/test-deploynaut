@@ -1,0 +1,130 @@
+# Workaround: required CodeQL with merge queue.
+# https://ewega.github.io/site/github/tutorial/2023/12/04/enabling-ghas-merge-queue/
+#
+# Require the Actions job "Check CodeQL Status" on main. Do not require the
+# GitHub Advanced Security check "Code scanning results / CodeQL" — that check
+# never reports on merge groups, so the queue waits forever.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: "17 11 * * 1"
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
+          wait-for-processing: true
+
+  # Substitute required check for "Code scanning results / CodeQL".
+  # Skip on merge_group: merge-queue temp refs have no PR to poll, and GHAS
+  # never uploads that check there.
+  check_codeql_status:
+    name: Check CodeQL Status
+    needs: analyze
+    if: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CodeQL status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          fetch_conclusion() {
+            gh api graphql -f query="
+              {
+                repository(owner: \"${REPO_OWNER}\", name: \"${REPO_NAME}\") {
+                  pullRequest(number: ${PR_NUMBER}) {
+                    commits(last: 1) {
+                      nodes {
+                        commit {
+                          checkSuites(first: 20, filterBy: {checkName: \"CodeQL\"}) {
+                            nodes {
+                              checkRuns(first: 20) {
+                                nodes {
+                                  name
+                                  status
+                                  conclusion
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            "
+          }
+
+          for attempt in $(seq 1 18); do
+            response="$(fetch_conclusion)"
+            conclusion="$(echo "${response}" | jq -r '
+              .data.repository.pullRequest.commits.nodes[0]
+              .commit.checkSuites.nodes[0]
+              .checkRuns.nodes[0]
+              .conclusion // empty
+            ')"
+
+            echo "Attempt ${attempt}: CodeQL conclusion=${conclusion:-missing}"
+
+            if [ "${conclusion}" = "SUCCESS" ]; then
+              echo "CodeQL check succeeded"
+              exit 0
+            fi
+            if [ "${conclusion}" = "FAILURE" ] || [ "${conclusion}" = "TIMED_OUT" ] || [ "${conclusion}" = "CANCELLED" ] || [ "${conclusion}" = "STARTUP_FAILURE" ]; then
+              echo "CodeQL check failed: ${conclusion}"
+              echo "${response}" | jq .
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "CodeQL check did not report SUCCESS in time"
+          echo "${response}" | jq .
+          exit 1
